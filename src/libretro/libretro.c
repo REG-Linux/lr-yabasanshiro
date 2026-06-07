@@ -16,6 +16,8 @@
 
 #include <file/file_path.h>
 
+#include "libretro_core_options.h"
+
 #include "vdp1.h"
 #include "vdp2.h"
 #include "peripheral.h"
@@ -108,30 +110,7 @@ extern struct retro_hw_render_callback hw_render;
 
 void retro_set_environment(retro_environment_t cb)
 {
-   static const struct retro_variable vars[] = {
-      { "yabasanshiro_force_hle_bios", "Force HLE BIOS (restart, deprecated, debug only); disabled|enabled" },
-      { "yabasanshiro_frameskip", "Auto-frameskip (prevent fast-forwarding); enabled|disabled" },
-      { "yabasanshiro_addon_cart", "Addon Cartridge (restart); 4M_extended_ram|1M_extended_ram" },
-      { "yabasanshiro_multitap_port1", "6Player Adaptor on Port 1; disabled|enabled" },
-      { "yabasanshiro_multitap_port2", "6Player Adaptor on Port 2; disabled|enabled" },
-#ifdef DYNAREC_DEVMIYAX
-      { "yabasanshiro_sh2coretype", "SH2 Core (restart); dynarec|interpreter" },
-#endif
-#ifdef ALLOW_POLYGON_MODE
-      { "yabasanshiro_polygon_mode", "Polygon Mode; perspective_correction|gpu_tesselation|cpu_tesselation" },
-#endif
-#ifndef LOW_END
-      { "yabasanshiro_resolution_mode", "Resolution Mode; original|2x|4x" },
-#else
-      { "yabasanshiro_resolution_mode", "Resolution Mode; original|2x" },
-#endif
-      { "yabasanshiro_rbg_resolution_mode", "RGB resolution mode; original|2x|720p|1080p" },
-      { "yabasanshiro_rbg_use_compute_shader", "RGB use compute shader for RGB; enabled|disabled" },
-#ifdef HAVE_VULKAN
-      { "yabasanshiro_video_core", "Video Core (restart); opengl|vulkan|software" },
-#endif
-      { NULL, NULL },
-   };
+   bool option_cats_supported = false;
 
    static const struct retro_controller_description peripherals[] = {
        { "Saturn Pad", RETRO_DEVICE_JOYPAD },
@@ -157,7 +136,7 @@ void retro_set_environment(retro_environment_t cb)
 
    environ_cb = cb;
 
-   cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void*)vars);
+   libretro_set_core_options(cb, &option_cats_supported);
    environ_cb(RETRO_ENVIRONMENT_SET_CONTROLLER_INFO, (void*)ports);
 }
 void retro_set_video_refresh(retro_video_refresh_t cb) { video_cb = cb; }
