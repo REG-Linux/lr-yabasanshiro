@@ -108,6 +108,42 @@ static struct retro_hw_render_callback hw_render;
 extern struct retro_hw_render_callback hw_render;
 #endif
 
+#ifdef HAVE_VULKAN
+/* Hide the GL/Vulkan-only upscale and shader knobs when the software renderer
+ * is selected — they have no effect there. Re-evaluated by the frontend
+ * whenever an option changes (see the update-display callback below). */
+static void update_core_options_display(void)
+{
+   struct retro_core_option_display option_display;
+   struct retro_variable var;
+   bool hw_renderer = true;
+
+   var.key   = "yabasanshiro_video_core";
+   var.value = NULL;
+   if (environ_cb && environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+      hw_renderer = (strcmp(var.value, "software") != 0);
+
+   option_display.visible = hw_renderer;
+
+   option_display.key = "yabasanshiro_resolution_mode";
+   environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display);
+   option_display.key = "yabasanshiro_rbg_resolution_mode";
+   environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display);
+   option_display.key = "yabasanshiro_rbg_use_compute_shader";
+   environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display);
+#ifdef ALLOW_POLYGON_MODE
+   option_display.key = "yabasanshiro_polygon_mode";
+   environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display);
+#endif
+}
+
+static bool core_options_update_display_cb(void)
+{
+   update_core_options_display();
+   return true;
+}
+#endif
+
 void retro_set_environment(retro_environment_t cb)
 {
    bool option_cats_supported = false;
@@ -138,6 +174,16 @@ void retro_set_environment(retro_environment_t cb)
 
    libretro_set_core_options(cb, &option_cats_supported);
    environ_cb(RETRO_ENVIRONMENT_SET_CONTROLLER_INFO, (void*)ports);
+
+#ifdef HAVE_VULKAN
+   {
+      struct retro_core_options_update_display_callback update_display_cb;
+      update_display_cb.callback = core_options_update_display_cb;
+      cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_UPDATE_DISPLAY_CALLBACK,
+            &update_display_cb);
+      update_core_options_display();
+   }
+#endif
 }
 void retro_set_video_refresh(retro_video_refresh_t cb) { video_cb = cb; }
 void retro_set_audio_sample(retro_audio_sample_t cb) { (void)cb; }

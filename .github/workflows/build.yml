@@ -8,12 +8,18 @@ on:
 
 jobs:
   linux:
-    name: ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.arch }}-${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
+        arch: [x86_64, aarch64]
+        name: [vulkan, opengl, gles]
         include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
           - name: vulkan
             make: HAVE_VULKAN=1
           - name: opengl
@@ -27,12 +33,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential \
+            build-essential nasm \
             zlib1g-dev libflac-dev liblzma-dev libzstd-dev \
             libgl1-mesa-dev libgles2-mesa-dev \
             libvulkan-dev libshaderc-dev
 
-      - name: Build (${{ matrix.name }})
+      - name: Build (${{ matrix.arch }} ${{ matrix.name }})
         run: |
           make clean
           make ${{ matrix.make }} -j$(nproc)
@@ -44,5 +50,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: yabasanshiro_libretro_${{ matrix.name }}
+          name: yabasanshiro_libretro_${{ matrix.arch }}_${{ matrix.name }}
           path: yabasanshiro_libretro.so
