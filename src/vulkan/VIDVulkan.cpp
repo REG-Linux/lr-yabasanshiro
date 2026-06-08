@@ -1611,11 +1611,12 @@ void VIDVulkan::SetSettingValue(int type, int value) {
 }
 
 void VIDVulkan::GetNativeResolution(int *width, int *height, int *interlace) {
-  /* NOTE: reporting the live Saturn resolution here would let the frontend track
-     geometry, but it makes the libretro frontend call VIDCore->Resize() mid-frame
-     on every resolution change, and the offscreen-target rebuild on that path
-     currently crashes (renderToOffecreenTarget). Left as a no-op until that
-     resize path is made safe. */
+  /* Report the live Saturn resolution so the libretro frontend can track
+     geometry (it calls Resize()/SET_GEOMETRY when this changes). Matches the
+     GL/Soft cores. */
+  *width = vdp2width;
+  *height = vdp2height;
+  *interlace = _vdp2_interlace;
 }
 
 void VIDVulkan::Vdp2DispOff(void) {}
@@ -6266,30 +6267,43 @@ void VIDVulkan::generateOffscreenPath(int width, int height) {
   VkDevice device = getDevice();
   VkPhysicalDevice physicalDevice = getPhysicalDevice();
 
+  /* Decide whether a rebuild is actually needed BEFORE destroying anything.
+     deleteOfscreenPath() nulls offscreenPass.frameBuffer; if we delete first and
+     then early-return on unchanged dimensions, the framebuffer is left NULL and
+     the next renderToOffecreenTarget() crashes in vkCmdBeginRenderPass. This is
+     the crash that previously made GetNativeResolution unsafe. */
+  int pretransformFlag = _renderer->getWindow()->GetPreTransFlag();
+  bool rotated = (pretransformFlag & VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ||
+                  pretransformFlag & VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR);
+  int wantW = rotated ? height : width;
+  int wantH = rotated ? width  : height;
+  if (offscreenPass.frameBuffer != VK_NULL_HANDLE &&
+      offscreenPass.width == wantW && offscreenPass.height == wantH)
+    return;
+
   deleteOfscreenPath();
 
-  int pretransformFlag = _renderer->getWindow()->GetPreTransFlag();
-  if (pretransformFlag & VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ||
-        pretransformFlag & VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR) {
+  /* No early-return here: deleteOfscreenPath() has already freed the framebuffer,
+     so we must recreate it unconditionally (the skip decision was made above,
+     accounting for framebuffer validity). */
+  offscreenPass.width  = wantW;
+  offscreenPass.height = wantH;
 
-      if (offscreenPass.height == width && offscreenPass.width == height)
-        return;
-      offscreenPass.width = height;
-      offscreenPass.height = width;
-
-  } else {
-
-      if (offscreenPass.width == width && offscreenPass.height == height)
-        return;
-      offscreenPass.width = width;
-      offscreenPass.height = height;
-  }
+#ifdef __LIBRETRO__
+  /* Match the color-only B8G8R8A8 window render pass the VDP2 pipelines are built
+     against, so offscreen draws (renderToOffecreenTarget) are render-pass-
+     compatible. A format/attachment/dependency mismatch makes the draw invalid
+     and crashes software drivers (lavapipe) on a resolution-change rebuild. */
+  const VkFormat offColorFormat = VK_FORMAT_B8G8R8A8_UNORM;
+#else
+  const VkFormat offColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
+#endif
 
   // Color attachment
   VkImageCreateInfo image = {};
   image.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
   image.imageType = VK_IMAGE_TYPE_2D;
-  image.format = VK_FORMAT_R8G8B8A8_UNORM;
+  image.format = offColorFormat;
   image.extent.width = offscreenPass.width;
   image.extent.height = offscreenPass.height;
   image.extent.depth = 1;
@@ -6320,7 +6334,7 @@ void VIDVulkan::generateOffscreenPath(int width, int height) {
   VkImageViewCreateInfo colorImageView = {};
   colorImageView.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
   colorImageView.viewType = VK_IMAGE_VIEW_TYPE_2D;
-  colorImageView.format = VK_FORMAT_R8G8B8A8_UNORM;
+  colorImageView.format = offColorFormat;
   colorImageView.subresourceRange = {};
   colorImageView.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
   colorImageView.subresourceRange.baseMipLevel = 0;
@@ -6379,7 +6393,7 @@ void VIDVulkan::generateOffscreenPath(int width, int height) {
 
   std::array<VkAttachmentDescription, 2> attchmentDescriptions = {};
   // Color attachment
-  attchmentDescriptions[0].format = VK_FORMAT_R8G8B8A8_UNORM;
+  attchmentDescriptions[0].format = offColorFormat;
   attchmentDescriptions[0].samples = VK_SAMPLE_COUNT_1_BIT;
   attchmentDescriptions[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
   attchmentDescriptions[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -6405,7 +6419,11 @@ void VIDVulkan::generateOffscreenPath(int width, int height) {
   subpassDescription.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
   subpassDescription.colorAttachmentCount = 1;
   subpassDescription.pColorAttachments = &colorReference;
+#ifdef __LIBRETRO__
+  subpassDescription.pDepthStencilAttachment = nullptr; /* color-only, matches window RP */
+#else
   subpassDescription.pDepthStencilAttachment = &depthReference;
+#endif
 
   // Use subpass dependencies for layout transitions
   std::array<VkSubpassDependency, 3> dependencies;
@@ -6437,16 +6455,20 @@ void VIDVulkan::generateOffscreenPath(int width, int height) {
   // Create the actual renderpass
   VkRenderPassCreateInfo renderPassInfo = {};
   renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-  renderPassInfo.attachmentCount = static_cast<uint32_t>(attchmentDescriptions.size());
   renderPassInfo.pAttachments = attchmentDescriptions.data();
-
-  // renderPassInfo.subpassCount = 0;
-  // renderPassInfo.pSubpasses = VK_NULL_HANDLE; // Optional
-
   renderPassInfo.subpassCount = 1;
   renderPassInfo.pSubpasses = &subpassDescription;
+#ifdef __LIBRETRO__
+  /* Single color attachment, no subpass dependencies — render-pass-compatible
+     with the window pass the VDP2 pipelines were built against. */
+  renderPassInfo.attachmentCount = 1;
+  renderPassInfo.dependencyCount = 0;
+  renderPassInfo.pDependencies = nullptr;
+#else
+  renderPassInfo.attachmentCount = static_cast<uint32_t>(attchmentDescriptions.size());
   renderPassInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
   renderPassInfo.pDependencies = dependencies.data();
+#endif
 
   VK_CHECK_RESULT(vkCreateRenderPass(device, &renderPassInfo, nullptr, &offscreenPass.renderPass));
 
@@ -6457,7 +6479,11 @@ void VIDVulkan::generateOffscreenPath(int width, int height) {
   VkFramebufferCreateInfo fbufCreateInfo = {};
   fbufCreateInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
   fbufCreateInfo.renderPass = offscreenPass.renderPass;
+#ifdef __LIBRETRO__
+  fbufCreateInfo.attachmentCount = 1; /* color only */
+#else
   fbufCreateInfo.attachmentCount = 2;
+#endif
   fbufCreateInfo.pAttachments = attachments;
   fbufCreateInfo.width = offscreenPass.width;
   fbufCreateInfo.height = offscreenPass.height;
