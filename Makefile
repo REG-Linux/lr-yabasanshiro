@@ -69,7 +69,10 @@ ifeq ($(HAVE_SSE),1)
 endif
 
 ifeq ($(HAVE_VULKAN),1)
-	LDFLAGS += -lvulkan -l:libshaderc.so.1
+	# shaderc's shared library is libshaderc_shared.so(.1); link by name so the
+	# soname is recorded and we don't hardcode a version (the old
+	# -l:libshaderc.so.1 assumed a non-standard library name).
+	LDFLAGS += -lvulkan -lshaderc_shared
 endif
 
 ifeq ($(DEBUG_ASAN), 1)
