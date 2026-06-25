@@ -629,7 +629,20 @@ void retro_set_resolution()
 
 const char * YuiGetShaderCachePath(void)
 {
-   return "/tmp/yabasanshiro_shader_cache";
+   /* The Vulkan renderers use this two ways: most append "<hash>.spv" to it
+    * (path prefix), but VdpPipelineFactory appends "/pipelineCache.bin"
+    * (directory). Return a real directory *with* a trailing slash and make
+    * sure it exists -- otherwise the pipeline-cache write opens
+    * "/tmp/yabasanshiro_shader_cache/pipelineCache.bin" in a directory that
+    * was never created, fails, and aborts the core with "Failed to open
+    * file" mid-run. */
+   static const char path[] = "/tmp/yabasanshiro_shader_cache/";
+   static int created = 0;
+   if (!created) {
+      mkdir("/tmp/yabasanshiro_shader_cache", 0755);
+      created = 1;
+   }
+   return path;
 }
 
 void YuiSwapBuffers(void)
