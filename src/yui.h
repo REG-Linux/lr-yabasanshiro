@@ -250,6 +250,12 @@ int YuiRevokeOGLOnThisThread();
 
 const char * YuiGetShaderCachePath();
 
+/* Implemented by the libretro frontend glue (src/libretro/libretro.c).
+   Declared here so the GL backends (ygles.c / yglshaderes.c) have a visible
+   prototype -- GCC 14+ rejects the implicit declarations otherwise. */
+void YuiMsg(const char *format, ...);
+int YuiGetFB(void);
+
 #if defined (__cplusplus)
 }
 #endif

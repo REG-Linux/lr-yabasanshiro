@@ -865,8 +865,9 @@ void VIDOGLVdp1WriteFrameBuffer(u32 type, u32 addr, u32 val ) {
         }
         else {
           spritepixelinfo_struct spi = { 0 };
-          Vdp1GetSpritePixelInfo(Vdp2Regs->SPCTL & 0x0F, &val, &spi);
-          _Ygl->CpuWriteFrameBuffer[texaddr] = VDP1COLOR(1, spi.colorcalc, spi.priority, 0, 0, val);
+          u16 maskval = val;
+          Vdp1GetSpritePixelInfo(Vdp2Regs->SPCTL & 0x0F, &maskval, &spi);
+          _Ygl->CpuWriteFrameBuffer[texaddr] = VDP1COLOR(1, spi.colorcalc, spi.priority, 0, 0, maskval);
         }
         break;
       case 2: {
