@@ -203,38 +203,59 @@ public:
     ivci.subresourceRange.layerCount = 1;
     vkCreateImageView(device, &ivci, nullptr, &_out_view);
 
-    /* Create render pass */
-    VkAttachmentDescription att = {};
-    att.format = VK_FORMAT_B8G8R8A8_UNORM;
-    att.samples = VK_SAMPLE_COUNT_1_BIT;
-    att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    att.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    att.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    att.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    /* Depth/stencil attachment. The VDP pipelines enable depth AND stencil
+       test (stencil is used for sprite-window masking, compareOp EQUAL/NOT_
+       EQUAL). Using those pipelines in a render pass that has NO depth/stencil
+       attachment is inconsistent across drivers: the desktop / Adreno-blob
+       drivers treat the absent test as "always pass" and draw, but Mesa/Turnip
+       drops the draws and the whole frame comes out black. The on-screen
+       Window always carries color+depth/stencil; LibretroWindow must match. */
+    _createDepth(width, height);
+
+    /* Create render pass: color (0) + depth/stencil (1) */
+    VkAttachmentDescription att[2] = {};
+    att[0].format = VK_FORMAT_B8G8R8A8_UNORM;
+    att[0].samples = VK_SAMPLE_COUNT_1_BIT;
+    att[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    att[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    att[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    att[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    att[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    att[1].format = _depth_format;
+    att[1].samples = VK_SAMPLE_COUNT_1_BIT;
+    att[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    att[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    att[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    att[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
     VkAttachmentReference colRef = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+    VkAttachmentReference depRef = { 1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
 
     VkSubpassDescription subpass = {};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colRef;
+    subpass.pDepthStencilAttachment = &depRef;
 
     VkRenderPassCreateInfo rpci = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-    rpci.attachmentCount = 1;
-    rpci.pAttachments = &att;
+    rpci.attachmentCount = 2;
+    rpci.pAttachments = att;
     rpci.subpassCount = 1;
     rpci.pSubpasses = &subpass;
 
     vkCreateRenderPass(device, &rpci, nullptr, &_rp);
     vkCreateRenderPass(device, &rpci, nullptr, &_rp_keep);
 
-    /* Create framebuffer */
+    /* Create framebuffer (color + depth/stencil) */
+    VkImageView fbAtt[2] = { _out_view, _depth_view };
     VkFramebufferCreateInfo fbci = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
     fbci.renderPass = _rp;
-    fbci.attachmentCount = 1;
-    fbci.pAttachments = &_out_view;
+    fbci.attachmentCount = 2;
+    fbci.pAttachments = fbAtt;
     fbci.width = width;
     fbci.height = height;
     fbci.layers = 1;
@@ -257,11 +278,18 @@ public:
     if (_out_view) vkDestroyImageView(device, _out_view, nullptr);
     if (_out_img) vkDestroyImage(device, _out_img, nullptr);
     if (_out_mem) vkFreeMemory(device, _out_mem, nullptr);
+    _destroyDepth();
   }
 
   VkRenderPass GetVulkanRenderPass() override { return _rp; }
   VkRenderPass GetVulkanKeepRenderPass() override { return _rp_keep; }
   VkFramebuffer GetVulkanActiveFramebuffer() override { return _fb; }
+  /* VIDVulkan transitions/uses the window's depth-stencil image directly
+     (e.g. the EARLY_FRAGMENT_TESTS barrier before the render pass); without
+     these overrides it would get the base class's NULL handle — invalid usage
+     that Turnip rejects (black frame, GPU hang). */
+  VkImage getDepthStencilImage() override { return _depth_img; }
+  VkImageView getDepthStencilImageView() override { return _depth_view; }
   VkExtent2D GetVulkanSurfaceSize() override { return {_out_w, _out_h}; }
   VkFormat getColorFormat() override { return VK_FORMAT_B8G8R8A8_UNORM; }
   VkSurfaceTransformFlagBitsKHR GetPreTransFlag() override
@@ -297,6 +325,7 @@ public:
     if (_out_view) vkDestroyImageView(device, _out_view, nullptr);
     if (_out_img) vkDestroyImage(device, _out_img, nullptr);
     if (_out_mem) vkFreeMemory(device, _out_mem, nullptr);
+    _destroyDepth();
 
     _out_w = width;
     _out_h = height;
@@ -350,13 +379,16 @@ public:
     ivci.subresourceRange.layerCount = 1;
     vkCreateImageView(device, &ivci, nullptr, &_out_view);
 
-    /* Render pass kept stable from construction (size-independent). */
+    /* Render pass kept stable from construction (size-independent). The
+       depth/stencil image is size-dependent, so recreate it (same format). */
+    _createDepth(width, height);
 
-    /* Recreate framebuffer against the existing render pass */
+    /* Recreate framebuffer against the existing render pass (color + depth) */
+    VkImageView fbAtt[2] = { _out_view, _depth_view };
     VkFramebufferCreateInfo fbci = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
     fbci.renderPass = _rp;
-    fbci.attachmentCount = 1;
-    fbci.pAttachments = &_out_view;
+    fbci.attachmentCount = 2;
+    fbci.pAttachments = fbAtt;
     fbci.width = width;
     fbci.height = height;
     fbci.layers = 1;
@@ -376,10 +408,85 @@ private:
        lightweight Window ctor parameters instead. */
   }
 
+  /* Pick a supported depth+stencil format (stencil is required by the VDP
+     sprite-window pipelines). Cached after the first call. */
+  VkFormat _pickDepthFormat()
+  {
+    if (_depth_format != VK_FORMAT_UNDEFINED) return _depth_format;
+    const VkFormat cands[] = { VK_FORMAT_D24_UNORM_S8_UINT,
+                               VK_FORMAT_D32_SFLOAT_S8_UINT,
+                               VK_FORMAT_D16_UNORM_S8_UINT };
+    for (VkFormat f : cands) {
+      VkFormatProperties p;
+      vkGetPhysicalDeviceFormatProperties(_vk->gpu, f, &p);
+      if (p.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+        _depth_format = f;
+        return f;
+      }
+    }
+    _depth_format = VK_FORMAT_D24_UNORM_S8_UINT;
+    return _depth_format;
+  }
+
+  void _createDepth(uint32_t width, uint32_t height)
+  {
+    VkDevice device = _vk->device;
+    _pickDepthFormat();
+
+    VkImageCreateInfo ici = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+    ici.imageType = VK_IMAGE_TYPE_2D;
+    ici.format = _depth_format;
+    ici.extent = { width, height, 1 };
+    ici.mipLevels = 1;
+    ici.arrayLayers = 1;
+    ici.samples = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vkCreateImage(device, &ici, nullptr, &_depth_img) != VK_SUCCESS) return;
+
+    VkMemoryRequirements mr;
+    vkGetImageMemoryRequirements(device, _depth_img, &mr);
+    VkMemoryAllocateInfo ai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+    ai.allocationSize = mr.size;
+    VkPhysicalDeviceMemoryProperties mp;
+    vkGetPhysicalDeviceMemoryProperties(_vk->gpu, &mp);
+    for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
+      if ((mr.memoryTypeBits & (1u << i)) &&
+          (mp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+        ai.memoryTypeIndex = i;
+        break;
+      }
+    }
+    vkAllocateMemory(device, &ai, nullptr, &_depth_mem);
+    vkBindImageMemory(device, _depth_img, _depth_mem, 0);
+
+    VkImageViewCreateInfo ivci = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+    ivci.image = _depth_img;
+    ivci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    ivci.format = _depth_format;
+    ivci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+    ivci.subresourceRange.levelCount = 1;
+    ivci.subresourceRange.layerCount = 1;
+    vkCreateImageView(device, &ivci, nullptr, &_depth_view);
+  }
+
+  void _destroyDepth()
+  {
+    VkDevice device = _vk->device;
+    if (_depth_view) { vkDestroyImageView(device, _depth_view, nullptr); _depth_view = VK_NULL_HANDLE; }
+    if (_depth_img)  { vkDestroyImage(device, _depth_img, nullptr); _depth_img = VK_NULL_HANDLE; }
+    if (_depth_mem)  { vkFreeMemory(device, _depth_mem, nullptr); _depth_mem = VK_NULL_HANDLE; }
+  }
+
   const struct retro_hw_render_interface_vulkan *_vk;
   VkImage _out_img = VK_NULL_HANDLE;
   VkDeviceMemory _out_mem = VK_NULL_HANDLE;
   VkImageView _out_view = VK_NULL_HANDLE;
+  VkImage _depth_img = VK_NULL_HANDLE;
+  VkDeviceMemory _depth_mem = VK_NULL_HANDLE;
+  VkImageView _depth_view = VK_NULL_HANDLE;
+  VkFormat _depth_format = VK_FORMAT_UNDEFINED;
   VkRenderPass _rp = VK_NULL_HANDLE;
   VkRenderPass _rp_keep = VK_NULL_HANDLE;
   VkFramebuffer _fb = VK_NULL_HANDLE;

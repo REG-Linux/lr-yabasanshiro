@@ -1218,6 +1218,14 @@ void vdp2ReqRestore() {
 //////////////////////////////////////////////////////////////////////////////
 void vdp2VBlankOUT(void) {
   static VideoInterface_struct * saved = NULL;
+  /* Saved real draw fns while frameskip points them at VIDDummy. Restoring by
+     saved pointer (instead of hardcoding per VIDCore->id) is what makes the
+     libretro wrapper cores work: their id is VIDCORE_VULKAN_LIBRETRO, which the
+     old id== checks below never matched, so the renderer stayed stuck on the
+     no-op dummy after the first skipped frame (black screen). */
+  static void (*saved_vdp2_draw_start)(void)   = NULL;
+  static void (*saved_vdp2_draw_end)(void)     = NULL;
+  static void (*saved_vdp2_draw_screens)(void) = NULL;
   int isrender = 0;
 #if PROFILE_RENDERING
   s64 starttime = YabauseGetTicks();
@@ -1259,6 +1267,9 @@ void vdp2VBlankOUT(void) {
     saved = VIDCore;
     
     previous_skipped = 1;
+    saved_vdp2_draw_start   = VIDCore->Vdp2DrawStart;
+    saved_vdp2_draw_end     = VIDCore->Vdp2DrawEnd;
+    saved_vdp2_draw_screens = VIDCore->Vdp2DrawScreens;
     VIDCore->Vdp2DrawStart = VIDDummy.Vdp2DrawStart;
     VIDCore->Vdp2DrawEnd   = VIDDummy.Vdp2DrawEnd;
     VIDCore->Vdp2DrawScreens = VIDDummy.Vdp2DrawScreens;
@@ -1270,26 +1281,12 @@ void vdp2VBlankOUT(void) {
     previous_skipped = 0;
     //VIDCore = saved;
     if( saved != NULL ){
-#if defined(HAVE_VULKAN)
-      if (VIDCore->id == VIDCORE_VULKAN) {
-
-        VIDCore->Vdp2DrawStart = VIDVulkanVdp2DrawStart;
-        VIDCore->Vdp2DrawEnd = VIDVulkanVdp2DrawEnd;
-        VIDCore->Vdp2DrawScreens = VIDVulkanVdp2DrawScreens;
-#else
-      if (0) {
-#endif
-      }
-      else if (VIDCore->id == VIDCORE_OGL) {
-        VIDCore->Vdp2DrawStart = VIDOGLVdp2DrawStart;
-        VIDCore->Vdp2DrawEnd = VIDOGLVdp2DrawEnd;
-        VIDCore->Vdp2DrawScreens = VIDOGLVdp2DrawScreens;
-      }
-      else if (VIDCore->id == VIDCORE_SOFT ) {
-        VIDCore->Vdp2DrawStart = VIDSoftVdp2DrawStart;
-        VIDCore->Vdp2DrawEnd = VIDSoftVdp2DrawEnd;
-        VIDCore->Vdp2DrawScreens = VIDSoftVdp2DrawScreens;
-      }
+      /* Restore the exact pointers saved on the skipped frame. Works for every
+         core including the libretro wrappers (VIDCORE_VULKAN_LIBRETRO), which
+         the old per-id branches missed -> renderer stuck on VIDDummy. */
+      if (saved_vdp2_draw_start)   VIDCore->Vdp2DrawStart   = saved_vdp2_draw_start;
+      if (saved_vdp2_draw_end)     VIDCore->Vdp2DrawEnd     = saved_vdp2_draw_end;
+      if (saved_vdp2_draw_screens) VIDCore->Vdp2DrawScreens = saved_vdp2_draw_screens;
     }
     saved = NULL;
   }
